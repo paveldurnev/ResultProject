@@ -1,0 +1,21 @@
+{
+  "name": "@cad/root",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.12.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "pnpm --filter @cad/sketcher dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }}
+
+

@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@cad/solver": ["../../packages/solver/src"],
+      "react": ["src/types/react-shim.d.ts"],
+      "react/jsx-runtime": ["src/types/react-shim.d.ts"],
+      "react-dom/client": ["src/types/react-shim.d.ts"]
+    }
+  },
+  "include": ["src", "vite.config.ts", "index.html"]
+}
+
+
