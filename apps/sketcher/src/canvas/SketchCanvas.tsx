@@ -1,7 +1,7 @@
 import React, { useRef, useState } from "react";
 import { useSketch } from "../state/store";
 
-const dotRadius = 4;
+const dotRadius = 2;
 
 export const SketchCanvas: React.FC = () => {
 	const { model, tool, addPoint, addSegment, setSelected, selected, movePoint, constraints } = useSketch();
@@ -195,7 +195,7 @@ export const SketchCanvas: React.FC = () => {
 						x2={p2.x}
 						y2={-p2.y}
 						stroke={isSel ? "#f59e0b" : "#111827"}
-						strokeWidth={isSel ? 3 : 2.5}
+						strokeWidth={isSel ? 1.5 : 1}
 						strokeLinecap="round"
 						onPointerDown={(e) => {
 							if (tool === "select") {
@@ -222,8 +222,8 @@ export const SketchCanvas: React.FC = () => {
 						cy={-p.y}
 						r={dotRadius}
 						fill={isSel ? "#f59e0b" : "#1f2937"}
-						stroke="#fff"
-						strokeWidth={isSel ? 1.2 : 0.8}
+						stroke="#d1d5db"
+						strokeWidth={isSel ? 0.8 : 0.6}
 						onPointerDown={(e) => {
 							if (tool === "select") {
 								e.stopPropagation();
