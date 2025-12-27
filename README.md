@@ -15,7 +15,7 @@ An interactive React-based sketcher with a variational constraint solver. Create
 - Create basic 2D geometry: points and segments
 - Apply constraints: coincident, fixed position, specified length
 - Visual hints and interactive editing on an SVG canvas
-- Separate TypeScript solver package implementing Levenberg–Marquardt with numeric Jacobian
+- Separate TypeScript solver package with analytical Jacobian
 
 
 ## Monorepo architecture

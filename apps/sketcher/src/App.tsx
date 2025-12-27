@@ -13,11 +13,11 @@ export const App: React.FC = () => {
 	useEffect(() => {
 		if (model.points.length === 0) return;
 		const h = setTimeout(() => {
-			const res = solve(model, constraints as Constraint[], { maxIterations: 25 });
+			const res = solve(model, constraints as Constraint[], { maxIterations: 200 });
 			if (res.converged) replaceModel(res.model);
 		}, 0);
 		return () => clearTimeout(h);
-	}, [model, constraints, replaceModel]);
+	}, [model, constraints]);
 
 	// delete via keyboard
 	useEffect(() => {

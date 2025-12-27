@@ -1,13 +1,13 @@
-import { Matrix, CholeskyDecomposition, LuDecomposition } from "ml-matrix";
+import { Matrix, LuDecomposition } from "ml-matrix";
 import type { Constraint, Model } from "./types";
 import { createPacking } from "./packing";
 import { residuals } from "./constraints";
+import { analyticJacobian } from "./jacobian";
 
 export type SolveOptions = {
 	maxIterations?: number;
-	initialDamping?: number;
-	gradientTolerance?: number;
-	stepTolerance?: number;
+	epsilon?: number;
+	regularizationTau?: number;
 };
 
 export type SolveResult = {
@@ -17,124 +17,101 @@ export type SolveResult = {
 	converged: boolean;
 };
 
-function numericJacobian(
-	model: Model,
-	constraints: Constraint[],
-	x: Float64Array,
-	f: (m: Model) => Float64Array,
-	eps = 1e-6
-): Matrix {
-	const y0 = f(model);
-	const m = y0.length;
-	const n = x.length;
-	const J = Matrix.zeros(m, n);
-	for (let j = 0; j < n; j += 1) {
-		const xpj = x.slice();
-		const xmj = x.slice();
-		const xpjVal = xpj[j] ?? 0;
-		const xmjVal = xmj[j] ?? 0;
-		xpj[j] = xpjVal + eps;
-		xmj[j] = xmjVal - eps;
-		const mp: Model = {
-			...model,
-			points: model.points.map((p, i) => {
-				const isX = j % 2 === 0 && i === Math.floor(j / 2);
-				const isY = j % 2 === 1 && i === Math.floor(j / 2);
-				const val = xpj[j] ?? (isX ? p.x : p.y);
-				return {
-					...p,
-					x: isX ? Number(val) : p.x,
-					y: isY ? Number(val) : p.y
-				};
-			})
-		};
-		const mm: Model = {
-			...model,
-			points: model.points.map((p, i) => {
-				const isX = j % 2 === 0 && i === Math.floor(j / 2);
-				const isY = j % 2 === 1 && i === Math.floor(j / 2);
-				const val = xmj[j] ?? (isX ? p.x : p.y);
-				return {
-					...p,
-					x: isX ? Number(val) : p.x,
-					y: isY ? Number(val) : p.y
-				};
-			})
-		};
-		const yp = residuals(mp, constraints).r;
-		const ym = residuals(mm, constraints).r;
-		for (let i = 0; i < m; i += 1) {
-			const ypi = yp[i] ?? 0;
-			const ymi = ym[i] ?? 0;
-			J.set(i, j, (ypi - ymi) / (2 * eps));
-		}
-	}
-	return J;
-}
 
 export function solve(model: Model, constraints: Constraint[], opts: SolveOptions = {}): SolveResult {
-	const { maxIterations = 50, initialDamping = 1e-3, gradientTolerance = 1e-12, stepTolerance = 1e-12 } = opts;
-	const packing = createPacking(model);
-	let x = packing.toVector(model);
-	let lambda = initialDamping;
-	let costPrev = Infinity;
+	const { maxIterations = 50, epsilon = 1e-6, regularizationTau = 1e-12 } = opts;
 
-	const f = (m: Model) => residuals(m, constraints).r;
+	// Base model and packing; dx accumulates [lambda, params] increments relative to this base
+	const packing = createPacking(model);
+	const baseModel = model;
+	const x0 = packing.toVector(baseModel);
+	const n = x0.length;
+
+	// Compute m (number of scalar constraint equations)
+	const rowsFor = (type: Constraint["type"]): number => {
+		switch (type) {
+			case "coincident":
+				return 2;
+			case "fix_point":
+				return 2;
+			case "distance":
+			case "parallel":
+			case "perpendicular":
+			case "vertical":
+			case "horizontal":
+			case "angle":
+			case "point_on_line":
+				return 1;
+			default:
+				return 0;
+		}
+	};
+	let m = 0;
+	for (const c of constraints) m += rowsFor(c.type);
+
+	// Full unknown vector length m + n: [lambda_1..m, dx_params_1..n]
+	let dx: Float64Array = new Float64Array(m + n);
+	dx.fill(0);
+
+	const residualVec = (): Float64Array => residuals(baseModel, constraints, dx).dF_dx;
 
 	let converged = false;
 	let iterations = 0;
 	for (iterations = 0; iterations < maxIterations; iterations += 1) {
-		const r = f(model);
-		const cost = 0.5 * Array.from(r).reduce((s, v) => s + v * v, 0);
-		const J = numericJacobian(model, constraints, x, f);
-		const JT = J.transpose();
-		const g = JT.mmul(Matrix.columnVector(Array.from(r))).to1DArray();
-		const gradInf = Math.max(...g.map((v) => Math.abs(v)));
-		if (gradInf < gradientTolerance) {
+		const R = residualVec();
+		let J = analyticJacobian(baseModel, constraints, dx);
+
+		// console.log(J.to2DArray());
+
+		// Optional tiny diagonal regularization for numerical stability
+		if (regularizationTau > 0) {
+			for (let i = 0; i < n; i += 1) {
+				J.set(m + i, m + i, J.get(m + i, m + i) + regularizationTau);
+			}
+		}
+
+		const b = Matrix.columnVector(Array.from(R, (v) => -v));
+		let deltaMat: Matrix;
+		try {
+			deltaMat = new LuDecomposition(J).solve(b);
+		} catch {
+			// If LU fails, try a slightly stronger diagonal regularization and retry once
+			for (let i = 0; i < J.rows; i += 1) J.set(i, i, J.get(i, i) + Math.max(regularizationTau, 1e-12));
+			deltaMat = new LuDecomposition(J).solve(b);
+		}
+		const step = deltaMat.to1DArray();
+
+		// Update dx
+		for (let i = 0; i < dx.length; i += 1) {
+			dx[i] = (dx[i] ?? 0) + (step[i] ?? 0);
+		}
+
+		// Check stopping criterion using the parameter subvector
+		let stepNorm2 = 0;
+		for (let i = 0; i < n; i += 1) {
+			const si = step[m + i] ?? 0;
+			stepNorm2 += si * si;
+		}
+		if (stepNorm2 < epsilon) {
 			converged = true;
 			break;
 		}
-		// Normal equations with damping: (J^T J + λI) δ = -J^T r
-		const H = JT.mmul(J);
-		for (let i = 0; i < H.rows; i += 1) {
-			H.set(i, i, H.get(i, i) + lambda);
+
+		// Update visible model for the next iteration (from base + accumulated dx_params)
+		const xNew: Float64Array = new Float64Array(n);
+		for (let i = 0; i < n; i += 1) {
+			xNew[i] = (x0[i] ?? 0) + (dx[m + i] ?? 0);
 		}
-		const b = Matrix.columnVector(g.map((v) => -v));
-		let delta: Matrix;
-		try {
-			delta = new CholeskyDecomposition(H).solve(b);
-		} catch {
-			// fallback to LU if not SPD
-			delta = new LuDecomposition(H).solve(b);
-		}
-		const dx = delta.to1DArray();
-		const xNew = x.map((xi, i) => xi + (dx[i] ?? 0));
-		const modelNew = packing.fromVector(model, Float64Array.from(xNew));
-		const rNew = f(modelNew);
-		const costNew = 0.5 * Array.from(rNew).reduce((s, v) => s + v * v, 0);
-		const denom = dx.reduce((s, v, i) => {
-			const vi = v ?? 0;
-			const gi = g[i] ?? 0;
-			return s + 0.5 * (H.get(i, i) * vi * vi + gi * vi);
-		}, 0);
-		const rho = (cost - costNew) / Math.max(1e-16, denom);
-		if (costNew < cost) {
-			model = modelNew;
-			x = Float64Array.from(xNew);
-			lambda = Math.max(1e-12, lambda / Math.max(2, 1 + 3 * (rho - 0.5)));
-			if (Math.abs(costPrev - costNew) < stepTolerance) {
-				converged = true;
-				costPrev = costNew;
-				break;
-			}
-			costPrev = costNew;
-		} else {
-			lambda = lambda * 2;
-		}
+		model = packing.fromVector(baseModel, xNew);
 	}
-	const rFinal = residuals(model, constraints).r;
-	const cost = 0.5 * Array.from(rFinal).reduce((s, v) => s + v * v, 0);
-	return { model, iterations, cost, converged };
+
+	// Final model and cost
+	const xFinal: Float64Array = new Float64Array(n);
+	for (let i = 0; i < n; i += 1) xFinal[i] = (x0[i] ?? 0) + (dx[m + i] ?? 0);
+	const finalModel = packing.fromVector(baseModel, xFinal);
+	const Rfinal = residuals(baseModel, constraints, dx).dF_dx;
+	const cost = 0.5 * Array.from(Rfinal).reduce((s, v) => s + v * v, 0);
+	return { model: finalModel, iterations, cost, converged };
 }
 
 
